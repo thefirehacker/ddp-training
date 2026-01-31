@@ -1,0 +1,87 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# PyTorch / Training
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+checkpoints/
+outputs/
+runs/
+logs/
+wandb/
+mlruns/
+
+# Profiling traces
+ddp_trace/
+*_trace/
+*.pt.trace.json
+*.chrome_trace.json
+tensorboard/
+tb_logs/
+
+# Model artifacts
+models/
+*.bin
+*.onnx
+
+# Data
+data/
+datasets/
+*.parquet
+*.arrow
+*.csv
+*.tsv
+*.jsonl
+
+# HuggingFace cache
+.cache/
+huggingface/
+
+# Misc
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.temp
+
+
+localtraces*

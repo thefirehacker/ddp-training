@@ -185,6 +185,15 @@ if __name__ == "__main__":
     if profiler_context:
         profiler_context.__exit__(None, None, None)
 
+    # Upload profiler traces to wandb as artifact
+    if state.is_main_process:
+        trace_dir = os.environ.get("TRACE_DIR", "ddp_trace")
+        if os.path.exists(trace_dir):
+            artifact = wandb.Artifact("profiler-traces", type="traces")
+            artifact.add_dir(trace_dir)
+            wandb.log_artifact(artifact)
+            print(f"Profiler traces uploaded to wandb as artifact")
+
     # Finish wandb logging
     if state.is_main_process:
         wandb.finish()

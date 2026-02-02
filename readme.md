@@ -57,19 +57,25 @@ Progressive GPT-2 training optimization following [Tyler Romero's worklog](https
 ### Running Tyler's Speedrun
 
 ```bash
+# Navigate to nanogpt-speedrun folder first
+cd nanogpt-speedrun
+
 # First time: download data (900M tokens, ~5min)
-modal run nanogpt-speedrun/src/runfiles/modal_runner.py::download_data
+modal run src/runfiles/modal_runner.py::download_data
 
 # Run any step (1-6)
-modal run nanogpt-speedrun/src/runfiles/modal_runner.py::train --step 1
-modal run nanogpt-speedrun/src/runfiles/modal_runner.py::train --step 2
-modal run nanogpt-speedrun/src/runfiles/modal_runner.py::train --step 3
-modal run nanogpt-speedrun/src/runfiles/modal_runner.py::train --step 4
-modal run nanogpt-speedrun/src/runfiles/modal_runner.py::train --step 5
-modal run nanogpt-speedrun/src/runfiles/modal_runner.py::train --step 6
+modal run src/runfiles/modal_runner.py::train --step 1
+modal run src/runfiles/modal_runner.py::train --step 2
+modal run src/runfiles/modal_runner.py::train --step 3
+modal run src/runfiles/modal_runner.py::train --step 4
+modal run src/runfiles/modal_runner.py::train --step 5
+modal run src/runfiles/modal_runner.py::train --step 6
 
 # With custom notes
-modal run nanogpt-speedrun/src/runfiles/modal_runner.py::train --step 1 --notes "first attempt"
+modal run src/runfiles/modal_runner.py::train --step 1 --notes "first attempt"
+
+# Return to root folder
+cd ..
 ```
 
 **Wandb Project**: `tyler-nanogpt-run`
@@ -83,11 +89,17 @@ World-record NanoGPT speedrun by Keller Jordan. Trains GPT-2 to 3.28 val loss in
 ### Running Keller's Speedrun
 
 ```bash
+# Navigate to modded-nanogpt folder first (required for Dockerfile)
+cd modded-nanogpt
+
 # First time: download data
-modal run modded-nanogpt/modal_modded_nanogpt.py::download_data
+modal run modal_modded_nanogpt.py::download_data
 
 # Run the speedrun (requires 8x H100)
-modal run modded-nanogpt/modal_modded_nanogpt.py::train
+modal run modal_modded_nanogpt.py::train
+
+# Return to root folder
+cd ..
 ```
 
 **Note**: torch.compile adds ~7 minutes latency on first run.

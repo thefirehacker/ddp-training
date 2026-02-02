@@ -35,9 +35,9 @@ app = modal.App("tyler-nanogpt-speedrun", image=image)
 
 
 @app.function(
-    gpu="L40S:2",
-    timeout=2 * 60 * 60,
+    timeout=2 * 60 * 60,  # No GPU needed for download
     volumes={DATA_DIR: data_vol},
+    secrets=[modal.Secret.from_name("HF_TOKEN")],
 )
 def download_data(num_chunks: int = 9):
     """
@@ -47,14 +47,38 @@ def download_data(num_chunks: int = 9):
         num_chunks: Number of 100M token chunks to download (default 9 = 900M tokens)
     """
     import subprocess
+    import sys
+    import os
+    
+    # Debug: show volume mount
+    print(f"Volume mounted at: {DATA_DIR}")
+    print(f"Volume exists: {os.path.exists(DATA_DIR)}")
+    if os.path.exists(DATA_DIR):
+        contents = os.listdir(DATA_DIR)
+        print(f"Volume contents: {len(contents)} files")
+        if contents:
+            print("Data already exists, skipping download.")
+            return
     
     print(f"Downloading {num_chunks} chunks (~{num_chunks * 100}M tokens)...")
+    print("This will take several minutes...")
     
-    subprocess.run(
+    result = subprocess.run(
         ["uv", "run", "python", "src/data/cached_fineweb10B.py", str(num_chunks)],
         cwd="/root/nanogpt-speedrun",
-        check=True,
+        stdout=sys.stdout,
+        stderr=sys.stderr,
     )
+    
+    if result.returncode != 0:
+        print(f"Download failed with exit code: {result.returncode}")
+        return
+    
+    # Show what was downloaded
+    if os.path.exists(DATA_DIR):
+        files = os.listdir(DATA_DIR)
+        print(f"Downloaded {len(files)} files to volume")
+    
     data_vol.commit()
     print(f"Data downloaded and saved to Modal Volume 'fineweb-data'")
 

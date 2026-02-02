@@ -1,11 +1,12 @@
 import modal
 from pathlib import Path
 
-# Volumes - reuse existing volumes
+# Volumes - reuse existing volumes (shared with nanogpt-speedrun)
 traces = modal.Volume.from_name("ddp-traces", create_if_missing=True)
 data_vol = modal.Volume.from_name("fineweb-data", create_if_missing=True)
 TRACE_DIR = Path("/traces")
-DATA_DIR = Path("/data")
+# Mount data volume at the path where modded-nanogpt expects it
+DATA_DIR = Path("/modded-nanogpt/data/fineweb10B")
 
 WANDB_PROJECT = "modded-nanogpt-run"
 
@@ -39,27 +40,63 @@ app = modal.App("modded-nanogpt", image=image)
 
 
 @app.function(
-    gpu="H100:8",
-    timeout=2 * 60 * 60,
+    timeout=2 * 60 * 60,  # No GPU needed for download
     volumes={DATA_DIR: data_vol},
+    secrets=[modal.Secret.from_name("HF_TOKEN")],
 )
 def download_data(num_chunks: int = 9):
     """
     Download FineWeb10B data to persistent volume.
+    
+    Note: This volume is shared with nanogpt-speedrun. If you already ran
+    download_data from Tyler's runner, the data is already here.
     
     Args:
         num_chunks: Number of 100M token chunks to download (default 9 = 900M tokens)
                    Use 103 for full 10B tokens
     """
     import subprocess
+    import sys
+    import os
+    
+    # Debug: show volume mount
+    print(f"Volume mounted at: {DATA_DIR}")
+    print(f"Volume exists: {os.path.exists(DATA_DIR)}")
+    if os.path.exists(DATA_DIR):
+        print(f"Volume contents: {os.listdir(DATA_DIR)}")
+    
+    # Check if data already exists (shared from nanogpt-speedrun)
+    val_file = "/modded-nanogpt/data/fineweb10B/fineweb_val_000000.bin"
+    if os.path.exists(val_file):
+        existing_files = len([f for f in os.listdir("/modded-nanogpt/data/fineweb10B") if f.endswith('.bin')])
+        print(f"Data already exists! Found {existing_files} .bin files")
+        print("Skipping download. Data was likely downloaded by nanogpt-speedrun.")
+        return
     
     print(f"Downloading {num_chunks} chunks (~{num_chunks * 100}M tokens)...")
+    print("This will take several minutes...")
     
-    subprocess.run(
+    # Run with output visible
+    result = subprocess.run(
         ["python", "data/cached_fineweb10B.py", str(num_chunks)],
         cwd="/modded-nanogpt",
-        check=True,
+        stdout=sys.stdout,
+        stderr=sys.stderr,
     )
+    
+    if result.returncode != 0:
+        print(f"Download failed with exit code: {result.returncode}")
+        return
+    
+    # Show what was downloaded
+    if os.path.exists(DATA_DIR):
+        files = os.listdir(DATA_DIR)
+        print(f"Downloaded {len(files)} files to volume")
+        for f in sorted(files)[:5]:
+            print(f"  - {f}")
+        if len(files) > 5:
+            print(f"  ... and {len(files) - 5} more")
+    
     data_vol.commit()
     print(f"Data downloaded and saved to Modal Volume 'fineweb-data'")
 

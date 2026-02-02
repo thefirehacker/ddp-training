@@ -82,6 +82,8 @@ models/
 
 # Data
 data/
+!nanogpt-speedrun/src/data/
+nanogpt-speedrun/src/data/fineweb10B/
 datasets/
 *.parquet
 *.arrow

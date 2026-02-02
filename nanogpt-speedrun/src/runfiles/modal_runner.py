@@ -5,7 +5,8 @@ from pathlib import Path
 traces = modal.Volume.from_name("ddp-traces", create_if_missing=True)
 data_vol = modal.Volume.from_name("fineweb-data", create_if_missing=True)
 TRACE_DIR = Path("/traces")
-DATA_DIR = Path("/data")
+# Mount data volume at the path where run.sh expects it
+DATA_DIR = Path("/root/nanogpt-speedrun/src/data/fineweb10B")
 
 WANDB_PROJECT = "tyler-nanogpt-run"
 
@@ -50,7 +51,7 @@ def download_data(num_chunks: int = 9):
     print(f"Downloading {num_chunks} chunks (~{num_chunks * 100}M tokens)...")
     
     subprocess.run(
-        ["uv", "run", "python", "data/cached_fineweb10B.py", str(num_chunks)],
+        ["uv", "run", "python", "src/data/cached_fineweb10B.py", str(num_chunks)],
         cwd="/root/nanogpt-speedrun",
         check=True,
     )

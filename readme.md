@@ -177,3 +177,97 @@ modal volume get ddp-traces / ./local_traces
 | Keller's Speedrun | H100:8 | ~$32 |
 
 Edit the Modal wrapper files to change GPU type/count.
+
+---
+
+## How Modal Runs These Projects
+
+All three projects run on Modal's cloud infrastructure. When you run `modal run <file>::<function>`, Modal:
+
+1. Parses your Python file
+2. Builds (or reuses cached) container image
+3. Spins up container with GPUs attached
+4. Mounts volumes and injects secrets
+5. Runs your function
+6. Tears down container when done
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Your laptop                                                │
+│  $ modal run modal_modded_nanogpt.py::train                 │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Modal Cloud                                                │
+│                                                             │
+│  1. Check if image is cached                                │
+│     ├── Cached? → Use existing image                        │
+│     └── Not cached? → Build new image                       │
+│                                                             │
+│  2. Spin up container with:                                 │
+│     - GPUs attached (L40S, H100, etc.)                      │
+│     - Volume mounts (fineweb-data, ddp-traces)              │
+│     - Secrets injected (WANDB_API_KEY)                      │
+│                                                             │
+│  3. Run function: train()                                   │
+│     └── subprocess: torchrun train_gpt.py                   │
+│                                                             │
+│  4. Container stops when function returns                   │
+│     - Volumes persisted (data survives)                     │
+│     - Container deleted (ephemeral)                         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Container Image Methods
+
+Modal supports two ways to define container images:
+
+| Method | Description | When to Use |
+|--------|-------------|-------------|
+| **Image Builder** | Chain of Modal commands | Simple pip dependencies |
+| **Dockerfile** | Standard Docker file | Complex builds, custom OS setup |
+
+### How Each Project Builds Its Image
+
+| Project | Method | Why |
+|---------|--------|-----|
+| Basic DDP | Image Builder | Simple - just pip packages |
+| Tyler's Speedrun | Image Builder | Uses `uv` package manager |
+| Keller's Modded | Dockerfile | Complex - custom Python 3.12, CUDA 12.6, Flash Attention 3 |
+
+**Basic DDP** (`modal_ddp.py`):
+```python
+image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install("torch~=2.5.1", "accelerate", ...)
+)
+```
+
+**Tyler's Speedrun** (`modal_runner.py`):
+```python
+image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .apt_install("curl")
+    .run_commands("curl -LsSf https://astral.sh/uv/install.sh | sh")
+    .add_local_dir(".", remote_path="/root/nanogpt-speedrun", copy=True)
+    .run_commands("uv sync --all-extras")
+)
+```
+
+**Keller's Modded** (`modal_modded_nanogpt.py`):
+```python
+image = modal.Image.from_dockerfile("Dockerfile")
+```
+
+### Shared Resources
+
+All projects share these Modal resources:
+
+| Resource | Type | Purpose |
+|----------|------|---------|
+| `fineweb-data` | Volume | Pre-tokenized training data (1.9 GB) |
+| `ddp-traces` | Volume | Profiler traces |
+| `wandb-secret` | Secret | Weights & Biases API key |
+
+Data downloaded once is available to all projects.

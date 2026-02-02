@@ -27,7 +27,9 @@ WORKDIR /modded-nanogpt
 RUN python -m pip install --upgrade pip && \
     pip install -r requirements.txt
 
-RUN pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu126 --upgrade
+# Pin to torch 2.10 which has Flash Attention 3 kernels available
+# Using stable 2.10 instead of bleeding-edge nightly
+RUN pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cu126
 
 CMD ["bash"]
 ENTRYPOINT []

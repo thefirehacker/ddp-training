@@ -26,7 +26,7 @@ image = (
     .apt_install("curl")
     .run_commands("curl -LsSf https://astral.sh/uv/install.sh | sh")
     .env({"PATH": "/root/.local/bin:$PATH"})
-    .add_local_dir(".", remote_path="/root/nanogpt-speedrun")
+    .add_local_dir(".", remote_path="/root/nanogpt-speedrun", copy=True)  # copy=True allows subsequent commands
     .workdir("/root/nanogpt-speedrun")
     .run_commands("uv sync --all-extras")
 )
@@ -37,7 +37,6 @@ app = modal.App("tyler-nanogpt-speedrun", image=image)
 @app.function(
     timeout=2 * 60 * 60,  # No GPU needed for download
     volumes={DATA_DIR: data_vol},
-    secrets=[modal.Secret.from_name("HF_TOKEN")],
 )
 def download_data(num_chunks: int = 9):
     """

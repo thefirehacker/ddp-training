@@ -42,7 +42,6 @@ app = modal.App("modded-nanogpt", image=image)
 @app.function(
     timeout=2 * 60 * 60,  # No GPU needed for download
     volumes={DATA_DIR: data_vol},
-    secrets=[modal.Secret.from_name("HF_TOKEN")],
 )
 def download_data(num_chunks: int = 9):
     """

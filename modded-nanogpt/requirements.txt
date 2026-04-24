@@ -1,6 +1,7 @@
 numpy
 tqdm
 torch
+wandb
 huggingface-hub
 kernels
 setuptools

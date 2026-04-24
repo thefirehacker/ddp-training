@@ -84,6 +84,10 @@ models/
 data/
 !nanogpt-speedrun/src/data/
 nanogpt-speedrun/src/data/fineweb10B/
+# modded-nanogpt: keep HF download helper; ignore token shards
+!modded-nanogpt/data/
+modded-nanogpt/data/fineweb10B/
+!modded-nanogpt/data/cached_fineweb10B.py
 datasets/
 *.parquet
 *.arrow

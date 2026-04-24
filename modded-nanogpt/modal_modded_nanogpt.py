@@ -42,6 +42,7 @@ app = modal.App("modded-nanogpt", image=image)
 @app.function(
     timeout=2 * 60 * 60,  # No GPU needed for download
     volumes={DATA_DIR: data_vol},
+    secrets=[modal.Secret.from_name("HF_TOKEN")],
 )
 def download_data(num_chunks: int = 9):
     """
@@ -104,7 +105,10 @@ def download_data(num_chunks: int = 9):
     gpu="H100:8",  # Official speedrun config: 8x H100
     timeout=60 * 60,  # 1 hour (record is ~3 minutes, but compile takes ~7 min)
     volumes={TRACE_DIR: traces, DATA_DIR: data_vol},
-    secrets=[modal.Secret.from_name("wandb-secret")],
+    secrets=[
+        modal.Secret.from_name("wandb-secret"),
+        modal.Secret.from_name("HF_TOKEN"),
+    ],
 )
 def train(num_gpus: int = 8):
     """

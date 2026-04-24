@@ -14,7 +14,7 @@ import math
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from itertools import accumulate
 from pathlib import Path
 import gc
@@ -1792,6 +1792,39 @@ def nvidia_smi():
 print0(nvidia_smi())
 print0("="*100)
 
+_wandb_enabled = False
+
+
+def _init_wandb_if_configured() -> None:
+    """Rank 0 only. Uses WANDB_API_KEY (e.g. Modal secret) and WANDB_PROJECT from env."""
+    global _wandb_enabled
+    if not master_process:
+        return
+    if os.environ.get("WANDB_DISABLED", "").lower() in ("1", "true", "yes"):
+        print0("WANDB_DISABLED set; skipping Weights & Biases", console=True)
+        return
+    if not os.environ.get("WANDB_API_KEY"):
+        print0("WANDB_API_KEY not set; skipping Weights & Biases (set secret / export to enable)", console=True)
+        return
+    import wandb
+
+    cfg = asdict(args)
+    wandb.init(
+        project=os.environ.get("WANDB_PROJECT", "modded-nanogpt"),
+        name=str(cfg["run_id"])[:16],
+        id=str(cfg["run_id"]),
+        resume="allow",
+        config=cfg,
+    )
+    _wandb_enabled = True
+    print0(
+        f"Weights & Biases run started: project={os.environ.get('WANDB_PROJECT', 'modded-nanogpt')} id={cfg['run_id']}",
+        console=True,
+    )
+
+
+_init_wandb_if_configured()
+
 model: nn.Module = GPT(
     vocab_size=50257,
     num_layers=11,
@@ -1882,6 +1915,17 @@ for step in range(train_steps + 1):
         del val_loader
         dist.reduce(val_loss, 0, op=dist.ReduceOp.AVG)
         print0(f"step:{step}/{train_steps} val_loss:{val_loss:.4f} train_time:{training_time_ms:.0f}ms step_avg:{training_time_ms/max(step, 1):.2f}ms", console=True)
+        if master_process and _wandb_enabled:
+            import wandb
+
+            wandb.log(
+                {
+                    "val_loss": float(val_loss.item()),
+                    "train_time_ms": training_time_ms,
+                    "step_avg_ms": training_time_ms / max(step, 1),
+                },
+                step=step,
+            )
         model.train()
         # start the clock again
         torch.cuda.synchronize()
@@ -1904,7 +1948,27 @@ for step in range(train_steps + 1):
     # logging
     approx_training_time_ms = training_time_ms + 1000 * (time.perf_counter() - t0)
     print0(f"step:{step+1}/{train_steps} train_time:{approx_training_time_ms:.0f}ms step_avg:{approx_training_time_ms/(step + 1):.2f}ms", console=True)
+    if master_process and _wandb_enabled:
+        import wandb
+
+        wandb.log(
+            {
+                "train_time_ms": approx_training_time_ms,
+                "step_avg_ms": approx_training_time_ms / (step + 1),
+            },
+            step=step + 1,
+        )
 
 print0(f"peak memory allocated: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB "
        f"reserved: {torch.cuda.max_memory_reserved() // 1024 // 1024} MiB", console=True)
+if master_process and _wandb_enabled:
+    import wandb
+
+    wandb.log(
+        {
+            "peak_mem_alloc_mib": int(torch.cuda.max_memory_allocated() // 1024 // 1024),
+            "peak_mem_reserved_mib": int(torch.cuda.max_memory_reserved() // 1024 // 1024),
+        }
+    )
+    wandb.finish()
 dist.destroy_process_group()

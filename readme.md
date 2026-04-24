@@ -2,6 +2,8 @@
 
 This project demonstrates PyTorch Distributed Data Parallel (DDP) training running on Modal's cloud GPUs, including NanoGPT speedrun implementations.
 
+This repository is part of **[First Break AI](https://cohort.bubblnet.com/)** — a free, open cohort for learning training, inference, and AI product building. The roadmap, checklist, and community live on that site.
+
 ## Prerequisites
 
 1. Install the Modal CLI:

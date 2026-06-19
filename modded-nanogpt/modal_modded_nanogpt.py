@@ -1,4 +1,5 @@
 import modal
+import os
 from pathlib import Path
 
 # Volumes - reuse existing volumes (shared with nanogpt-speedrun)
@@ -37,6 +38,16 @@ image_alt = (
 )
 
 app = modal.App("modded-nanogpt", image=image)
+
+
+def _trace_files_in_dir(trace_dir: Path) -> set[str]:
+    if not trace_dir.exists():
+        return set()
+    return {
+        name
+        for name in os.listdir(trace_dir)
+        if name.endswith((".json", ".json.gz")) or ".trace" in name
+    }
 
 
 @app.function(
@@ -110,7 +121,7 @@ def download_data(num_chunks: int = 9):
         modal.Secret.from_name("HF_TOKEN"),
     ],
 )
-def train(num_gpus: int = 8):
+def train(num_gpus: int = 8, profiler: bool = False):
     """
     Run official NanoGPT speedrun (Keller Jordan's modded-nanogpt).
     
@@ -119,6 +130,7 @@ def train(num_gpus: int = 8):
     
     Args:
         num_gpus: Number of GPUs to use (default 8)
+        profiler: If True, capture a short PyTorch profiler trace to /traces (ddp-traces volume)
     """
     import subprocess
     import sys
@@ -127,6 +139,10 @@ def train(num_gpus: int = 8):
     env = os.environ.copy()
     env["WANDB_PROJECT"] = WANDB_PROJECT
     env["TRACE_DIR"] = str(TRACE_DIR)
+    if profiler:
+        env["ENABLE_PROFILER"] = "1"
+
+    traces_before = _trace_files_in_dir(TRACE_DIR)
 
     print("=" * 60)
     print("Modded-NanoGPT Speedrun (Keller Jordan)")
@@ -147,8 +163,20 @@ def train(num_gpus: int = 8):
     )
 
     # Commit traces to persistent volume
+    traces_after = _trace_files_in_dir(TRACE_DIR)
+    new_traces = traces_after - traces_before
     traces.commit()
-    print(f"\nTraces saved to Modal Volume 'ddp-traces'")
+    if new_traces:
+        print(f"\nTraces saved to Modal Volume 'ddp-traces' ({len(new_traces)} new file(s))")
+        for name in sorted(new_traces)[:5]:
+            print(f"  - {name}")
+        if len(new_traces) > 5:
+            print(f"  ... and {len(new_traces) - 5} more")
+    elif traces_after:
+        print(f"\nNo new trace files this run ({len(traces_after)} existing on ddp-traces)")
+        print("Re-run with profiler enabled: modal run modal_modded_nanogpt.py::train --profiler")
+    else:
+        print("\nNo profiler traces on ddp-traces (enable with --profiler on train)")
     
     if result.returncode != 0:
         print(f"Training failed with exit code: {result.returncode}")

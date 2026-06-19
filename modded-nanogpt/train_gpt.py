@@ -1825,6 +1825,31 @@ def _init_wandb_if_configured() -> None:
 
 _init_wandb_if_configured()
 
+TRACE_DIR = os.environ.get("TRACE_DIR", "/traces")
+
+
+def _profiler_enabled() -> bool:
+    return os.environ.get("ENABLE_PROFILER", "").lower() in ("1", "true", "yes")
+
+
+def _upload_trace_artifact(trace_dir: str) -> None:
+    if not master_process or not _wandb_enabled:
+        return
+    if not os.path.isdir(trace_dir):
+        return
+    trace_files = [
+        f for f in os.listdir(trace_dir)
+        if f.endswith(".json") or f.endswith(".json.gz") or ".trace" in f
+    ]
+    if not trace_files:
+        return
+    import wandb
+
+    artifact = wandb.Artifact("profiler-traces", type="traces")
+    artifact.add_dir(trace_dir)
+    wandb.log_artifact(artifact)
+    print0(f"Profiler traces uploaded to wandb ({len(trace_files)} file(s))", console=True)
+
 model: nn.Module = GPT(
     vocab_size=50257,
     num_layers=11,
@@ -1886,6 +1911,24 @@ train_loader = distributed_data_generator(args.train_files, args.train_bs_schedu
 
 gc.collect()
 
+profiler_context = None
+if master_process and _profiler_enabled():
+    from torch.profiler import ProfilerActivity, profile, schedule
+
+    os.makedirs(TRACE_DIR, exist_ok=True)
+    print0(f"ENABLE_PROFILER: writing traces to {TRACE_DIR}", console=True)
+    _profiler_schedule = schedule(skip_first=2, wait=1, warmup=1, active=3, repeat=1)
+    profiler_context = profile(
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        schedule=_profiler_schedule,
+        on_trace_ready=torch.profiler.tensorboard_trace_handler(TRACE_DIR),
+        record_shapes=True,
+        profile_memory=True,
+        with_stack=True,
+    )
+if profiler_context:
+    profiler_context.__enter__()
+
 training_time_ms = 0
 # start the clock
 torch.cuda.synchronize()
@@ -1945,6 +1988,9 @@ for step in range(train_steps + 1):
         (model(inputs, targets, cum_seqlens, bigram_inputs, training_manager.get_forward_args()) / grad_accum_steps).backward()
     training_manager.step_optimizers(step)
 
+    if profiler_context:
+        profiler_context.step()
+
     # logging
     approx_training_time_ms = training_time_ms + 1000 * (time.perf_counter() - t0)
     print0(f"step:{step+1}/{train_steps} train_time:{approx_training_time_ms:.0f}ms step_avg:{approx_training_time_ms/(step + 1):.2f}ms", console=True)
@@ -1959,6 +2005,9 @@ for step in range(train_steps + 1):
             step=step + 1,
         )
 
+if profiler_context:
+    profiler_context.__exit__(None, None, None)
+
 print0(f"peak memory allocated: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB "
        f"reserved: {torch.cuda.max_memory_reserved() // 1024 // 1024} MiB", console=True)
 if master_process and _wandb_enabled:
@@ -1970,5 +2019,6 @@ if master_process and _wandb_enabled:
             "peak_mem_reserved_mib": int(torch.cuda.max_memory_reserved() // 1024 // 1024),
         }
     )
+    _upload_trace_artifact(TRACE_DIR)
     wandb.finish()
 dist.destroy_process_group()

@@ -100,6 +100,9 @@ modal run modal_modded_nanogpt.py::download_data
 # Run the speedrun (requires 8x H100)
 modal run modal_modded_nanogpt.py::train
 
+# Optional: capture PyTorch profiler traces to ddp-traces + W&B Artifacts (adds overhead)
+modal run modal_modded_nanogpt.py::train --profiler
+
 # Return to root folder
 cd ..
 ```
@@ -107,6 +110,16 @@ cd ..
 **Note**: torch.compile adds ~7 minutes latency on first run.
 
 **Wandb Project**: `modded-nanogpt-run`
+
+**Metrics vs traces**
+
+| Output | Default `train` | `train --profiler` |
+|--------|-----------------|---------------------|
+| W&B Charts (`val_loss`, `train_time_ms`, …) | Yes | Yes |
+| W&B Artifacts (`profiler-traces`) | No | Yes (if traces written) |
+| Modal volume `ddp-traces` (`.pt.trace.json`) | No | Yes |
+
+`download_data` does not write traces; only training with the profiler flag does.
 
 ---
 
@@ -117,9 +130,11 @@ After training, view your logs at [wandb.ai](https://wandb.ai):
 - `tyler-nanogpt-run` - Tyler Romero's speedrun steps
 - `modded-nanogpt-run` - Keller Jordan's world-record speedrun
 
+**Modded-nanogpt:** Charts tab shows scalars from every run. The **Artifacts** tab gets `profiler-traces` only when you run `modal run modal_modded_nanogpt.py::train --profiler` (or set `ENABLE_PROFILER=1` in the training env).
+
 ## Downloading Profiler Traces
 
-After training completes, download the traces:
+After a **profiler-enabled** modded-nanogpt run (or Project 1 DDP training), download traces from Modal:
 
 ```bash
 # List available traces
@@ -128,6 +143,8 @@ modal volume ls ddp-traces
 # Download all traces to a local directory
 modal volume get ddp-traces / ./local_traces
 ```
+
+Project 1 (`modal_ddp.py`) always profiles. Keller's speedrun profiles only with `--profiler`.
 
 ## Viewing Traces in Perfetto
 

@@ -263,6 +263,7 @@ if __name__ == "__main__":
     parser.add_argument("--val_loss_every", type=int, default=0, help="every how mant steps to evaluate val loss?")
     parser.add_argument("--val_max_steps", type=int, default=20, help="how many batches of val to average?")
     parser.add_argument("--disable_wandb", action="store_true", help="disable wandb logging")
+    parser.add_argument("--notes", type=str, default=None, help="Notes for the run, will be logged to wandb.")
     args = parser.parse_args()
 
     # args error checking and convenience variables
@@ -284,14 +285,22 @@ if __name__ == "__main__":
     seed_offset = 0 # each process gets the exact same seed
 
     # begin logging
+    wandb_enabled = False
     if master_process:
         run_id = uuid.uuid4()
         os.makedirs('logs', exist_ok=True)
         logfile = f'logs/{run_id}.txt'
         print0(logfile, console=True)
-        # initialize wandb
-        if not args.disable_wandb:
-            wandb.init(project="nanogpt-speedrun", name=str(run_id), config=args)
+        # initialize wandb (honors WANDB_PROJECT / WANDB_API_KEY like modded-nanogpt)
+        if args.disable_wandb or os.environ.get("WANDB_DISABLED", "").lower() in ("1", "true", "yes"):
+            print0("WandB disabled; skipping Weights & Biases", console=True)
+        elif not os.environ.get("WANDB_API_KEY"):
+            print0("WANDB_API_KEY not set; skipping Weights & Biases", console=True)
+        else:
+            wandb_project = os.environ.get("WANDB_PROJECT", "tyler-nanogpt-run")
+            wandb.init(project=wandb_project, name=str(run_id), config=args, notes=args.notes)
+            wandb_enabled = True
+            print0(f"Weights & Biases run started: project={wandb_project} id={run_id}", console=True)
 
     print0(f"Running pytorch {torch.version.__version__}")
     print(f"using device: {device}")
@@ -388,7 +397,7 @@ if __name__ == "__main__":
                 val_loss /= args.val_max_steps
             # log val loss
             print0(f'step:{step}/{args.num_iterations} val_loss:{val_loss:.4f} train_time:{training_time_ms:.0f}ms step_avg:{training_time_ms/(timed_steps-1):.2f}ms', console=True)
-            if master_process and not args.disable_wandb:
+            if master_process and wandb_enabled:
                 wandb.log({"val_loss": val_loss, "train_time": training_time_ms, "step": step, "tokens_seen": tokens_seen, "step_avg": training_time_ms/(timed_steps-1)})
             # start the clock again
             torch.cuda.synchronize()
@@ -431,7 +440,7 @@ if __name__ == "__main__":
             tokens_seen += tokens_per_fwdbwd
             approx_time = training_time_ms + 1000 * (time.perf_counter() - t0)
             print0(f"step:{step+1}/{args.num_iterations} train_loss:{train_loss.item():.4f} train_time:{approx_time:.0f}ms step_avg:{approx_time/timed_steps:.2f}ms tokens_seen:{tokens_seen:.2e}", console=True)
-            if not args.disable_wandb:
+            if wandb_enabled:
                 wandb.log({"train_loss": train_loss.item(), "train_time": approx_time, "step": step+1, "step_avg": approx_time/timed_steps, "tokens_seen": tokens_seen, "lr": lr, "grad_norm": norm})
 
 
@@ -440,5 +449,5 @@ if __name__ == "__main__":
     print0(f"peak memory consumption: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB")
     # clean up nice
     destroy_process_group()
-    if master_process and not args.disable_wandb:
+    if master_process and wandb_enabled:
         wandb.finish()

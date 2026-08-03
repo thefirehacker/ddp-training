@@ -16,12 +16,16 @@ This repository is part of **[First Break AI](https://cohort.bubblnet.com/)** �
    modal token new
    ```
 
-3. Create a wandb secret for logging (required for speedruns):
+3. Create secrets for speedruns (Projects 2 and 3):
    ```bash
    modal secret create wandb-secret WANDB_API_KEY=your_api_key_here
+   modal secret create HF_TOKEN HF_TOKEN=your_huggingface_token_here
    ```
-   
-   Get your API key from [wandb.ai/authorize](https://wandb.ai/authorize).
+
+   Get your W&B key from [wandb.ai/authorize](https://wandb.ai/authorize).  
+   `HF_TOKEN` is only needed if you still have to download FineWeb into the `fineweb-data` volume.
+
+4. For **H100** jobs (Tyler + Keller speedruns), add a payment method in Modal Settings → Usage & Billing. Credits alone are not enough for H100.
 
 ---
 
@@ -43,12 +47,16 @@ This will:
 
 ## Project 2: NanoGPT Speedrun (Tyler Romero)
 
-Progressive GPT-2 training optimization following [Tyler Romero's worklog](https://www.tylerromero.com/posts/nanogpt-speedrun-worklog/). Run each step to see how optimizations improve training time.
+Progressive GPT-2 training optimization following [Tyler Romero's worklog](https://www.tylerromero.com/posts/nanogpt-speedrun-worklog/). Each `--step` copies that step’s `train_gpt2.py` and runs its `run.sh` on Modal.
+
+**Modal entrypoint:** [`nanogpt-speedrun/src/runfiles/modal_runner.py`](nanogpt-speedrun/src/runfiles/modal_runner.py)
 
 ### Steps Overview
 
-| Step | Folder | Expected Time | Key Changes |
-|------|--------|---------------|-------------|
+Times below are Tyler’s original **2×RTX 4090** wall-clock. This repo’s Modal runner uses **8×H100**, so wall-clock is much shorter; the optimization sequence is the same.
+
+| Step | Folder | Original 2×4090 time | Key Changes |
+|------|--------|----------------------|-------------|
 | 1 | 01-Initialbaseline | ~8 hrs | Base GPT-2 from llm.c |
 | 2 | 02-ArchitecturalChanges | ~7.5 hrs | RoPE, ReLU², trapezoidal LR |
 | 3 | 03-MuonOptimizer | ~4.5 hrs | Muon optimizer |
@@ -56,31 +64,60 @@ Progressive GPT-2 training optimization following [Tyler Romero's worklog](https
 | 5 | 05-LogitSoftCappingat30 | ~4 hrs | Logit soft-capping |
 | 6 | 06-LongerSequenceLength | ~2.5 hrs | FlexAttention, 32K seq |
 
-### Running Tyler's Speedrun
+### Before you run
+
+Shared with Project 3 (modded-nanogpt):
+
+| Need | Name |
+|------|------|
+| Volume (data) | `fineweb-data` |
+| Volume (traces) | `ddp-traces` |
+| Secret | `wandb-secret` (`WANDB_API_KEY`) |
+| Secret | `HF_TOKEN` (for download if data is missing) |
+| GPUs | `H100:8` |
+
+Modal requires a **payment method on file** to use H100s (credits alone are not enough). Add one under Settings → Usage & Billing.
+
+If `fineweb-data` already has `fineweb_train_*.bin` and `fineweb_val_000000.bin`, skip `download_data`.
+
+### Running Tyler's Speedrun on Modal
 
 ```bash
-# Navigate to nanogpt-speedrun folder first
+# Must run from nanogpt-speedrun/ (image syncs this directory)
 cd nanogpt-speedrun
 
-# First time: download data (900M tokens, ~5min)
+# Only if fineweb-data is empty (~900M tokens, a few minutes)
 modal run src/runfiles/modal_runner.py::download_data
 
-# Run any step (1-6)
+# Step 1 — Initial baseline (01-Initialbaseline)
+# Target: FineWeb val_loss <= 3.28 (or finish 24576 steps)
 modal run src/runfiles/modal_runner.py::train --step 1
+
+# Optional notes for the W&B run
+modal run src/runfiles/modal_runner.py::train --step 1 --notes "first attempt"
+
+# Later optimization steps
 modal run src/runfiles/modal_runner.py::train --step 2
 modal run src/runfiles/modal_runner.py::train --step 3
 modal run src/runfiles/modal_runner.py::train --step 4
 modal run src/runfiles/modal_runner.py::train --step 5
 modal run src/runfiles/modal_runner.py::train --step 6
 
-# With custom notes
-modal run src/runfiles/modal_runner.py::train --step 1 --notes "first attempt"
-
-# Return to root folder
 cd ..
 ```
 
-**Wandb Project**: `tyler-nanogpt-run`
+What `train --step 1` does:
+
+1. Mounts `fineweb-data` at `src/data/fineweb10B` and `ddp-traces` at `/traces`
+2. Copies `src/runfiles/01-Initialbaseline/train_gpt2.py` → `src/train_gpt2.py`
+3. Runs `01-Initialbaseline/run.sh` with `torchrun` on **8 GPUs** (`grad_accum_steps=1` so global batch stays **262144**)
+4. Logs to W&B project **`tyler-nanogpt-run`**
+
+Watch for `val_loss` every 128 steps (not every `train_loss` line). Walkthrough: [`tutorial/tyler-speedrun/Whatisbaseline.md`](tutorial/tyler-speedrun/Whatisbaseline.md).
+
+**Wandb Project**: `tyler-nanogpt-run`  
+**GPUs**: `H100:8`  
+**App name**: `tyler-nanogpt-speedrun`
 
 ---
 
@@ -192,7 +229,7 @@ Project 1 (`modal_ddp.py`) always profiles. Keller's speedrun profiles only with
 | Project | Default GPU | Cost/hr |
 |---------|-------------|---------|
 | DDP Training | L40S:2 | ~$2.60 |
-| Tyler's Speedrun | L40S:2 | ~$2.60 |
+| Tyler's Speedrun | H100:8 | ~$32/hr |
 | Keller's Speedrun | H100:8 | ~$32 |
 
 Edit the Modal wrapper files to change GPU type/count.

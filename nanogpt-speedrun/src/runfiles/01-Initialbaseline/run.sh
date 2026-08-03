@@ -7,10 +7,14 @@
 # 3. Improved learning rate schedule (linear up from 0, then linear down to 0.1 * max)
 # 4. Removed all affine scale and bias parameters from the architecture, and switched to
 #    RMSNorm (actually this just simplifies the code but doesn't speed up training)
+#
+# Scaled to 8 GPUs: keep total_batch_size=262144 by dropping grad_accum_steps 4→1
+# (32 * 1024 * 8 * 1 == 262144)
 
-NUM_GPUS=2
+NUM_GPUS=8
+NOTES="${1:-}"
 
-CUDA_VISIBLE_DEVICES=0,1 uv run torchrun \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 uv run torchrun \
     --standalone \
     --nproc_per_node=${NUM_GPUS} \
     src/train_gpt2.py \
@@ -21,9 +25,10 @@ CUDA_VISIBLE_DEVICES=0,1 uv run torchrun \
         --batch_size 32 \
         --sequence_length 1024 \
         --total_batch_size 262144 \
-        --grad_accum_steps 4 \
+        --grad_accum_steps 1 \
         --val_loss_every 128 \
         --num_iterations 24576 \
         --weight_decay 0.1 \
         --learning_rate 0.0015 \
-        --warmup_iters 256
+        --warmup_iters 256 \
+        --notes "${NOTES}"

@@ -158,3 +158,5 @@ CLAUDE.md
 
 # Project specific
 localtraces*
+
+ignore/*

@@ -1,8 +1,8 @@
 # Distributed Data Parallel Training on Modal - Multi GPU
 
-This project demonstrates PyTorch Distributed Data Parallel (DDP) training running on Modal's cloud GPUs, including NanoGPT speedrun implementations.
+This repository is part of **[FBA Lab](https://bubblnet.com/)** — the First Break AI interactive training lab. Study real PyTorch / NanoGPT speedrun code with synced views for code, architecture, lessons, and training runs (browser study mode; no GPU required to learn).
 
-This repository is part of **[First Break AI](https://cohort.bubblnet.com/)** — a free, open cohort for learning training, inference, and AI product building. The roadmap, checklist, and community live on that site.
+It demonstrates PyTorch Distributed Data Parallel (DDP) training on Modal’s cloud GPUs, including Tyler’s NanoGPT speedrun steps and Keller’s modded-nanogpt path. Use this repo to run the labs on real multi-GPU hardware after you’ve explored them on [bubblnet.com](https://bubblnet.com/).
 
 ## Prerequisites
 

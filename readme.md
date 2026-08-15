@@ -1,329 +1,392 @@
-# Distributed Data Parallel Training on Modal - Multi GPU
+# LLM Training: PyTorch DDP → NanoGPT Speedrun
 
-This repository is part of **[FBA Lab](https://bubblnet.com/)** — the First Break AI interactive training lab. Study real PyTorch / NanoGPT speedrun code with synced views for code, architecture, lessons, and training runs (browser study mode; no GPU required to learn).
+Learn how an LLM training run works from the actual code — starting with a small PyTorch Distributed Data Parallel example and progressing to NanoGPT speedruns, Muon, H100 profiling, and Keller Jordan's modded-nanogpt.
 
-It demonstrates PyTorch Distributed Data Parallel (DDP) training on Modal’s cloud GPUs, including Tyler’s NanoGPT speedrun steps and Keller’s modded-nanogpt path. Use this repo to run the labs on real multi-GPU hardware after you’ve explored them on [bubblnet.com](https://bubblnet.com/).
+This repository is the runnable-code companion to **[FBA Lab](https://bubblnet.com/lab/speedrun)**.
 
-## Prerequisites
+**Want to understand the code before running it?**
 
-1. Install the Modal CLI:
-   ```bash
-   pip install modal
-   ```
+→ [Open the interactive LLM Training Speedrun](https://bubblnet.com/lab/speedrun)
 
-2. Authenticate with Modal:
-   ```bash
-   modal token new
-   ```
-
-3. Create secrets for speedruns (Projects 2 and 3):
-   ```bash
-   modal secret create wandb-secret WANDB_API_KEY=your_api_key_here
-   modal secret create HF_TOKEN HF_TOKEN=your_huggingface_token_here
-   ```
-
-   Get your W&B key from [wandb.ai/authorize](https://wandb.ai/authorize).  
-   `HF_TOKEN` is only needed if you still have to download FineWeb into the `fineweb-data` volume.
-
-4. For **H100** jobs (Tyler + Keller speedruns), add a payment method in Modal Settings → Usage & Billing. Credits alone are not enough for H100.
+FBA Lab keeps the **training code, model architecture, explanations, visualizations, and real training-run data** together while you work through the run.
 
 ---
 
-## Project 1: Basic DDP Training
+## What's in this repo?
 
-Run basic DDP training on 2x L40S GPUs:
+There are three useful starting points.
+
+| Project | What it teaches | Hardware |
+|---|---|---|
+| **PyTorch DDP** | How multiple GPUs train synchronized copies of one model | 2× L40S |
+| **NanoGPT Speedrun** | Progressive GPT-2 training optimizations from Tyler Romero's speedrun | 8× H100 |
+| **modded-nanogpt** | Keller Jordan's highly optimized NanoGPT training stack | 8× H100 |
+
+If you are learning distributed training for the first time, start with **Project 1**.
+
+If you already understand basic PyTorch training and want to study LLM training systems, start with **Project 2**.
+
+---
+
+# 1. PyTorch Distributed Data Parallel
+
+The simplest project in the repository.
+
+Start here if you want to understand what happens when one PyTorch training job is spread across multiple GPUs.
+
+Files:
+
+- [`ddp.py`](ddp.py) — learner-friendly DDP training script
+- [`modal_ddp.py`](modal_ddp.py) — launches the job on Modal
+- [`training_utils/`](training_utils/) — supporting utilities
+
+The important ideas are:
+
+```text
+different batch on each GPU
+        ↓
+same model on each GPU
+        ↓
+forward pass
+        ↓
+loss.backward()
+        ↓
+gradient synchronization
+        ↓
+optimizer.step()
+        ↓
+identical updated model on every GPU
+```
+
+Run it on 2× L40S GPUs:
 
 ```bash
 modal run modal_ddp.py::train_single_node
 ```
 
 This will:
-- Launch a container with 2x L40S GPUs on Modal
-- Run `ddp.py` using `torchrun` for distributed training
-- Save profiler traces to a persistent Modal Volume
-- Log training metrics to Weights & Biases
+
+- launch a 2-GPU Modal container
+- start the processes with `torchrun`
+- train using PyTorch DDP
+- capture profiler traces
+- log training metrics to Weights & Biases
 
 ---
 
-## Project 2: NanoGPT Speedrun (Tyler Romero)
+# 2. NanoGPT Speedrun
 
-Progressive GPT-2 training optimization following [Tyler Romero's worklog](https://www.tylerromero.com/posts/nanogpt-speedrun-worklog/). Each `--step` copies that step’s `train_gpt2.py` and runs its `run.sh` on Modal.
+This section follows the progressive GPT-2 training optimizations documented by Tyler Romero.
 
-**Modal entrypoint:** [`nanogpt-speedrun/src/runfiles/modal_runner.py`](nanogpt-speedrun/src/runfiles/modal_runner.py)
+Instead of jumping directly into a highly optimized training script, the run is broken into a sequence of changes.
 
-### Steps Overview
+Directory:
 
-Times below are Tyler’s original **2×RTX 4090** wall-clock. This repo’s Modal runner uses **8×H100**, so wall-clock is much shorter; the optimization sequence is the same.
+```text
+nanogpt-speedrun/
+```
 
-| Step | Folder | Original 2×4090 time | Key Changes |
-|------|--------|----------------------|-------------|
-| 1 | 01-Initialbaseline | ~8 hrs | Base GPT-2 from llm.c |
-| 2 | 02-ArchitecturalChanges | ~7.5 hrs | RoPE, ReLU², trapezoidal LR |
-| 3 | 03-MuonOptimizer | ~4.5 hrs | Muon optimizer |
-| 4 | 04-DataLoadingTwerks | ~4.3 hrs | Micro-batch loading |
-| 5 | 05-LogitSoftCappingat30 | ~4 hrs | Logit soft-capping |
-| 6 | 06-LongerSequenceLength | ~2.5 hrs | FlexAttention, 32K seq |
+Modal entrypoint:
 
-### Before you run
+```text
+nanogpt-speedrun/src/runfiles/modal_runner.py
+```
 
-Shared with Project 3 (modded-nanogpt):
+## The six steps
 
-| Need | Name |
-|------|------|
-| Volume (data) | `fineweb-data` |
-| Volume (traces) | `ddp-traces` |
-| Secret | `wandb-secret` (`WANDB_API_KEY`) |
-| Secret | `HF_TOKEN` (for download if data is missing) |
-| GPUs | `H100:8` |
+| Step | Experiment | Main change |
+|---|---|---|
+| 1 | Initial baseline | Simple GPT-2 training run |
+| 2 | Architecture changes | RoPE, ReLU², learning-rate changes |
+| 3 | Muon optimizer | Introduces Muon |
+| 4 | Data loading | Improves the training input pipeline |
+| 5 | Logit soft-capping | Caps extreme logits |
+| 6 | Longer sequence length | Longer context and attention changes |
 
-Modal requires a **payment method on file** to use H100s (credits alone are not enough). Add one under Settings → Usage & Billing.
+The corresponding source folders are:
 
-If `fineweb-data` already has `fineweb_train_*.bin` and `fineweb_val_000000.bin`, skip `download_data`.
+```text
+nanogpt-speedrun/src/runfiles/
+├── 01-Initialbaseline/
+├── 02-ArchitecturalChanges/
+├── 03-MuonOptimizer/
+├── 04-DataLoadingTwerks/
+├── 05-LogitSoftCappingat30/
+└── 06-LongerSequenceLength/
+```
 
-### Running Tyler's Speedrun on Modal
+### Study the run interactively first
+
+The FBA Lab version lets you move through the same progression while keeping the code, architecture, explanation and run data synchronized:
+
+**https://bubblnet.com/lab/speedrun**
+
+Start directly with the baseline:
+
+**https://bubblnet.com/lab/speedrun/journey/tyler-01**
+
+---
+
+## Running the NanoGPT speedrun on Modal
+
+First install Modal:
 
 ```bash
-# Must run from nanogpt-speedrun/ (image syncs this directory)
+pip install modal
+```
+
+Authenticate:
+
+```bash
+modal token new
+```
+
+Create the required secrets:
+
+```bash
+modal secret create wandb-secret WANDB_API_KEY=your_api_key_here
+modal secret create HF_TOKEN HF_TOKEN=your_huggingface_token_here
+```
+
+The speedrun uses:
+
+```text
+GPUs:        H100:8
+Data volume: fineweb-data
+Trace volume: ddp-traces
+W&B secret:  wandb-secret
+HF secret:   HF_TOKEN
+```
+
+If the FineWeb data is not already present:
+
+```bash
 cd nanogpt-speedrun
 
-# Only if fineweb-data is empty (~900M tokens, a few minutes)
 modal run src/runfiles/modal_runner.py::download_data
+```
 
-# Step 1 — Initial baseline (01-Initialbaseline)
-# Target: FineWeb val_loss <= 3.28 (or finish 24576 steps)
+Run the baseline:
+
+```bash
 modal run src/runfiles/modal_runner.py::train --step 1
+```
 
-# Optional notes for the W&B run
-modal run src/runfiles/modal_runner.py::train --step 1 --notes "first attempt"
+Then run the successive experiments:
 
-# Later optimization steps
+```bash
 modal run src/runfiles/modal_runner.py::train --step 2
 modal run src/runfiles/modal_runner.py::train --step 3
 modal run src/runfiles/modal_runner.py::train --step 4
 modal run src/runfiles/modal_runner.py::train --step 5
 modal run src/runfiles/modal_runner.py::train --step 6
-
-cd ..
 ```
 
-What `train --step 1` does:
+You can attach notes to a run:
 
-1. Mounts `fineweb-data` at `src/data/fineweb10B` and `ddp-traces` at `/traces`
-2. Copies `src/runfiles/01-Initialbaseline/train_gpt2.py` → `src/train_gpt2.py`
-3. Runs `01-Initialbaseline/run.sh` with `torchrun` on **8 GPUs** (`grad_accum_steps=1` so global batch stays **262144**)
-4. Logs to W&B project **`tyler-nanogpt-run`**
-
-Watch for `val_loss` every 128 steps (not every `train_loss` line). Walkthrough: [`tutorial/tyler-speedrun/Whatisbaseline.md`](tutorial/tyler-speedrun/Whatisbaseline.md).
-
-**Wandb Project**: `tyler-nanogpt-run`  
-**GPUs**: `H100:8`  
-**App name**: `tyler-nanogpt-speedrun`
+```bash
+modal run src/runfiles/modal_runner.py::train \
+  --step 1 \
+  --notes "first attempt"
+```
 
 ---
 
-## Project 3: Modded-NanoGPT (Keller Jordan)
+## What the baseline runner does
 
-World-record NanoGPT speedrun by Keller Jordan. Trains GPT-2 to 3.28 val loss in under 100 seconds on 8x H100.
+For Step 1, the Modal runner:
 
-### Running Keller's Speedrun
+1. mounts the FineWeb data
+2. mounts the profiler-trace volume
+3. selects the baseline `train_gpt2.py`
+4. starts the distributed run with `torchrun`
+5. launches the job across 8 GPUs
+6. logs metrics to Weights & Biases
+
+The baseline walkthrough is also available here:
+
+```text
+tutorial/tyler-speedrun/Whatisbaseline.md
+```
+
+Interactive version:
+
+**https://bubblnet.com/lab/speedrun/journey/tyler-01**
+
+---
+
+# 3. Keller Jordan's modded-nanogpt
+
+The `modded-nanogpt/` directory contains the path for running Keller Jordan's highly optimized NanoGPT training stack on Modal.
+
+Directory:
+
+```text
+modded-nanogpt/
+```
+
+Enter the directory:
 
 ```bash
-# Navigate to modded-nanogpt folder first (required for Dockerfile)
 cd modded-nanogpt
-
-# First time: download data
-modal run modal_modded_nanogpt.py::download_data
-
-# Run the speedrun (requires 8x H100)
-modal run modal_modded_nanogpt.py::train
-
-# Optional: capture PyTorch profiler traces to ddp-traces + W&B Artifacts (adds overhead)
-modal run modal_modded_nanogpt.py::train --profiler
-
-# Return to root folder
-cd ..
 ```
 
-**Note**: torch.compile adds ~7 minutes latency on first run.
+Download the data if needed:
 
-**Wandb Project**: `modded-nanogpt-run`
+```bash
+modal run modal_modded_nanogpt.py::download_data
+```
 
-**Metrics vs traces**
+Run training:
 
-| Output | Default `train` | `train --profiler` |
-|--------|-----------------|---------------------|
-| W&B Charts (`val_loss`, `train_time_ms`, …) | Yes | Yes |
-| W&B Artifacts (`profiler-traces`) | No | Yes (if traces written) |
-| Modal volume `ddp-traces` (`.pt.trace.json`) | No | Yes |
+```bash
+modal run modal_modded_nanogpt.py::train
+```
 
-`download_data` does not write traces; only training with the profiler flag does.
+Run with PyTorch profiler capture:
+
+```bash
+modal run modal_modded_nanogpt.py::train --profiler
+```
+
+The standard run logs scalar metrics to W&B.
+
+The profiler-enabled run additionally captures profiler traces.
 
 ---
 
-## Viewing Training Logs in Wandb
+# H100 profiler traces
 
-After training, view your logs at [wandb.ai](https://wandb.ai):
-- `ddp-training` - Basic DDP training
-- `tyler-nanogpt-run` - Tyler Romero's speedrun steps
-- `modded-nanogpt-run` - Keller Jordan's world-record speedrun
+One of the most useful ways to understand a real training run is to look at where GPU time actually goes.
 
-**Modded-nanogpt:** Charts tab shows scalars from every run. The **Artifacts** tab gets `profiler-traces` only when you run `modal run modal_modded_nanogpt.py::train --profiler` (or set `ENABLE_PROFILER=1` in the training env).
+Profiler traces can show:
 
-## Downloading Profiler Traces
+- forward-pass kernels
+- backward-pass kernels
+- gradient synchronization
+- NCCL communication
+- memory operations
+- optimizer work
+- kernel launches
+- CPU/GPU gaps
 
-After a **profiler-enabled** modded-nanogpt run (or Project 1 DDP training), download traces from Modal:
+After a profiler-enabled run:
 
 ```bash
-# List available traces
 modal volume ls ddp-traces
+```
 
-# Download all traces to a local directory
+Download the traces:
+
+```bash
 modal volume get ddp-traces / ./local_traces
 ```
 
-Project 1 (`modal_ddp.py`) always profiles. Keller's speedrun profiles only with `--profiler`.
+Open the resulting `.pt.trace.json` file in Perfetto:
 
-## Viewing Traces in Perfetto
+```text
+https://ui.perfetto.dev
+```
 
-1. Open [ui.perfetto.dev](https://ui.perfetto.dev) in your browser
-2. Click "Open trace file" or drag and drop
-3. Select the `.pt.trace.json` file from your downloaded traces
-4. Explore the timeline to analyze:
-   - Forward/backward pass timing
-   - Data movement overhead
-   - Gradient synchronization
-   - Optimizer step timing
+FBA Lab also walks through the training system interactively:
+
+**https://bubblnet.com/lab/speedrun**
 
 ---
 
-## Project Structure
+# Weights & Biases
 
-```
-├── ddp.py                          # Basic DDP training script
-├── modal_ddp.py                    # Modal wrapper for DDP
-├── training_utils/                 # Shared utilities
-│   ├── __init__.py
-│   ├── memory.py
-│   ├── trun.py
-│   └── utils.py
-├── nanogpt-speedrun/               # Tyler Romero's speedrun
-│   ├── src/runfiles/
-│   │   ├── modal_runner.py         # Modal wrapper
-│   │   ├── 01-Initialbaseline/
-│   │   ├── 02-ArchitecturalChanges/
-│   │   ├── 03-MuonOptimizer/
-│   │   ├── 04-DataLoadingTwerks/
-│   │   ├── 05-LogitSoftCappingat30/
-│   │   └── 06-LongerSequenceLength/
-│   └── pyproject.toml
-├── modded-nanogpt/                 # Keller Jordan's speedrun
-│   ├── modal_modded_nanogpt.py     # Modal wrapper
-│   ├── train_gpt.py
-│   ├── Dockerfile
-│   └── requirements.txt
-└── readme.md
+The projects used by the repository are:
+
+```text
+ddp-training
+tyler-nanogpt-run
+modded-nanogpt-run
 ```
 
-## GPU Configuration
+The normal training runs log scalar metrics such as loss and training time.
 
-| Project | Default GPU | Cost/hr |
-|---------|-------------|---------|
-| DDP Training | L40S:2 | ~$2.60 |
-| Tyler's Speedrun | H100:8 | ~$32/hr |
-| Keller's Speedrun | H100:8 | ~$32 |
-
-Edit the Modal wrapper files to change GPU type/count.
+Profiler artifacts are generated only when profiling is enabled.
 
 ---
 
-## How Modal Runs These Projects
+# Repository structure
 
-All three projects run on Modal's cloud infrastructure. When you run `modal run <file>::<function>`, Modal:
-
-1. Parses your Python file
-2. Builds (or reuses cached) container image
-3. Spins up container with GPUs attached
-4. Mounts volumes and injects secrets
-5. Runs your function
-6. Tears down container when done
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Your laptop                                                │
-│  $ modal run modal_modded_nanogpt.py::train                 │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Modal Cloud                                                │
-│                                                             │
-│  1. Check if image is cached                                │
-│     ├── Cached? → Use existing image                        │
-│     └── Not cached? → Build new image                       │
-│                                                             │
-│  2. Spin up container with:                                 │
-│     - GPUs attached (L40S, H100, etc.)                      │
-│     - Volume mounts (fineweb-data, ddp-traces)              │
-│     - Secrets injected (WANDB_API_KEY)                      │
-│                                                             │
-│  3. Run function: train()                                   │
-│     └── subprocess: torchrun train_gpt.py                   │
-│                                                             │
-│  4. Container stops when function returns                   │
-│     - Volumes persisted (data survives)                     │
-│     - Container deleted (ephemeral)                         │
-└─────────────────────────────────────────────────────────────┘
+```text
+.
+├── ddp.py
+├── modal_ddp.py
+│
+├── training_utils/
+│
+├── nanogpt-speedrun/
+│   └── src/
+│       └── runfiles/
+│           ├── 01-Initialbaseline/
+│           ├── 02-ArchitecturalChanges/
+│           ├── 03-MuonOptimizer/
+│           ├── 04-DataLoadingTwerks/
+│           ├── 05-LogitSoftCappingat30/
+│           └── 06-LongerSequenceLength/
+│
+├── modded-nanogpt/
+│
+└── tutorial/
 ```
 
-### Container Image Methods
+---
 
-Modal supports two ways to define container images:
+# Suggested learning path
 
-| Method | Description | When to Use |
-|--------|-------------|-------------|
-| **Image Builder** | Chain of Modal commands | Simple pip dependencies |
-| **Dockerfile** | Standard Docker file | Complex builds, custom OS setup |
+If you're here to **learn**, use this order:
 
-### How Each Project Builds Its Image
-
-| Project | Method | Why |
-|---------|--------|-----|
-| Basic DDP | Image Builder | Simple - just pip packages |
-| Tyler's Speedrun | Image Builder | Uses `uv` package manager |
-| Keller's Modded | Dockerfile | Complex - custom Python 3.12, CUDA 12.6, Flash Attention 3 |
-
-**Basic DDP** (`modal_ddp.py`):
-```python
-image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .pip_install("torch~=2.5.1", "accelerate", ...)
-)
+```text
+1. Read ddp.py
+       ↓
+2. Understand ranks and DDP
+       ↓
+3. Follow the NanoGPT baseline
+       ↓
+4. Trace forward → loss → backward → optimizer
+       ↓
+5. Study the six speedrun iterations
+       ↓
+6. Inspect the H100 profiler
+       ↓
+7. Read the modded-nanogpt optimizations
 ```
 
-**Tyler's Speedrun** (`modal_runner.py`):
-```python
-image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .apt_install("curl")
-    .run_commands("curl -LsSf https://astral.sh/uv/install.sh | sh")
-    .add_local_dir(".", remote_path="/root/nanogpt-speedrun", copy=True)
-    .run_commands("uv sync --all-extras")
-)
+The interactive version of this path is in FBA Lab:
+
+### [Open the LLM Training Speedrun →](https://bubblnet.com/lab/speedrun)
+
+No GPU is required to study the interactive run.
+
+---
+
+# Upstream work
+
+This repo includes and builds on:
+
+- [tyler-romero/nanogpt-speedrun](https://github.com/tyler-romero/nanogpt-speedrun)
+- [kellerjordan/modded-nanogpt](https://github.com/kellerjordan/modded-nanogpt)
+
+Original MIT licenses remain in [`nanogpt-speedrun/LICENSE`](nanogpt-speedrun/LICENSE) and [`modded-nanogpt/LICENSE`](modded-nanogpt/LICENSE).
+
+The goal of this repository is educational: make the training code runnable, inspectable and easier to understand.
+
+---
+
+## FBA Lab
+
+**You know the pieces. See the whole AI model training run.**
+
+FBA Lab is an interactive environment for studying real AI model training through synchronized:
+
+```text
+CODE ↔ ARCHITECTURE ↔ EXPLANATION ↔ TRAINING RUN
 ```
 
-**Keller's Modded** (`modal_modded_nanogpt.py`):
-```python
-image = modal.Image.from_dockerfile("Dockerfile")
-```
+Start here:
 
-### Shared Resources
-
-All projects share these Modal resources:
-
-| Resource | Type | Purpose |
-|----------|------|---------|
-| `fineweb-data` | Volume | Pre-tokenized training data (1.9 GB) |
-| `ddp-traces` | Volume | Profiler traces |
-| `wandb-secret` | Secret | Weights & Biases API key |
-
-Data downloaded once is available to all projects.
+**https://bubblnet.com/lab/speedrun**

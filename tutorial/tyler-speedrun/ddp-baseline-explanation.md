@@ -1,5 +1,27 @@
 # Baseline Data Loading: Shards, Batches, and the DistributedDataLoader
 
+## What should be the order of explanation
+
+### What i understood ( check this )
+
+`_peek_data_shard`: internal handler function uses np and buffers. checks for magic number, and gives number of tokens mentioned in header. returns number of token
+
+`_load_data_shard`: This one also checks token for number of tokens. This returns the actual tokens
+
+logic is in main after model is compiled DistributedDataLoader is called for both test and val. it calls reset function which calls `_load_data_SHARD`
+
+my assumption is shard is a piece of data and batch is segment within it that need to be fed to the model ( check this too ) next_batch calls advance of next shard is required
+
+batching logic ( explain this properly how are batches selected. on 8 gpus and on each one
+
+class DistributedDataLoader
+
+### Order
+
+I want to understand purpose of batching i understand ddp but now i want a mental picture of data loading batching and sharding what is its need and how is it handled here
+
+---
+
 You already understand DDP: eight copies of the same model, eight different slices of data, gradients averaged, one optimizer step, identical weights again. What that picture still leaves open is **how those eight slices get onto the GPUs**. That is the whole job of this loader. It is not a PyTorch `Dataset`. It is a cursor walking a pre-tokenized integer stream.
 
 Source of truth:

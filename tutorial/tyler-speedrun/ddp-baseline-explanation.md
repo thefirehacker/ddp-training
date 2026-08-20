@@ -441,10 +441,138 @@ Train never resets inside the loop. It walks the train shards in order, wraps wi
 
 ---
 
+## 9. Training objective: next-token prediction
+
+The objective is next-token prediction. For a stream of token ids \(s_0, s_1, \ldots\), the loss at stream offset \(k\) is
+
+\[
+\mathcal{L}_k = -\log p_\theta(s_{k+1} \mid s_{\le k})
+\]
+
+The batch evaluates that loss at many \(k\) at once and averages. There is no `[MASK]` token written into the input. This is not BERT-style masked language modeling.
+
+`x` and `y` are the same stream, indexed one token apart, then folded to shape `(B, T)`. Let \(p\) be this rank’s `current_position`:
+
+```python
+buf = tokens[p : p + B*T + 1]     # length B*T+1
+x = buf[:-1].view(B, T)
+y = buf[1:].view(B, T)
+```
+
+\[
+\begin{aligned}
+x[i,j] &= s_{p + iT + j} \\
+y[i,j] &= s_{p + iT + j + 1}
+\end{aligned}
+\]
+
+`(i, j)` is an index into the **batch tensor**, not an identity of tokens. The two ids at that index differ by one stream step: \(y[i,j] = x[i, j+1]\) when \(j < T-1\), and \(y[i, T-1] = x[i+1, 0]\) at a row boundary (or the leftover token when \(i = B-1\)). The extra `+1` on `buf` exists so \(y[B-1, T-1]\) still has a defined target.
+
+For a concrete layout, `B=4`, `T=1024` gives two tensors of shape `(4, 1024)`: four packed sequences of length 1024. `x` holds 4,096 ids (what the network reads). `y` holds 4,096 ids (class labels). The stream slice behind them is 4,097 ids. The four rows are consecutive tiles, not four independently sampled documents.
+
+`forward(idx, targets)` uses the two tensors for different jobs.
+
+- `idx` is `x`. It is the only thing embedded (`wte(idx)`), the only thing that receives position ids, the only thing that enters the blocks. Hidden state \(h_{i,j}\) is a function of \(x[i, 0], \ldots, x[i,j]\) because attention is called with `is_causal=True`.
+- `targets` is `y`. It never enters `wte`. After `lm_head`, `logits` has shape `(B, T, V)`. Cross-entropy treats `logits[i,j,:]` as a classifier over the vocab and `y[i,j]` as the class index.
+
+Both tensors are moved to the GPU because that `cross_entropy` runs there. Being on the device does not make `y` an input to the net.
+
+The causal mask is required for the objective to be well-defined. \(y[i,j]\) is physically present in `x` at \((i, j+1)\) (or the next row). If position \(j\) could attend to \(j+1\), the target would be visible in the input. Teacher forcing still feeds the ground-truth left context (`x`), not the model’s own previous guesses. What is withheld is only the future, and it is withheld in attention, not by editing `x`.
+
+---
+
+## 10. Local batch, global batch, micro-batch
+
+These three names are easy to collapse. They are not the same size.
+
+A **micro-batch** is one `forward` on one GPU: the whole `(B, T)` tensor. The `B` rows are **one** micro-batch, not `B` micro-batches. If you have 16 sequences and each forward takes 4, that is four micro-batches.
+
+**Local batch** is that same micro-batch, stated in sequences or tokens.
+
+**Global batch** is every token whose gradient is included in the next `optimizer.step()`:
+
+```
+global tokens = B × T × num_GPUs × grad_accum
+```
+
+Weights change only when `optimizer.step()` runs. Everything before that (`forward`, `backward`) writes `.grad`. “Once per global batch” means: gather the gradient from that full token count, then `step()` once. `zero_grad()`, next global batch, next `step()`.
+
+`step()` waits on `grad_accum`, not on `B`. `B` only says how many sequences sit inside each forward.
+
+When `grad_accum=1`, “once per micro-batch” and “once per global batch” name the **same** `step()`. This rank ran one `(B, T)`, DDP averaged with the other GPUs, then everyone stepped. They only diverge when `grad_accum > 1`: several local forwards, gradients added, then one `step()`.
+
+### Baseline numbers (`grad_accum=1`)
+
+**Local (per GPU, one forward)**
+
+- `B = 32` sequences
+- `T = 1024`
+- tokens: `32 × 1024 = 32,768`
+
+**Global (one `optimizer.step()`)**
+
+- sequences: `32 × 8 × 1 = 256`
+- tokens: `32 × 1024 × 8 × 1 = 262,144`
+
+That 262,144 is `--total_batch_size`. The script’s `B` is the local sequence count.
+
+### Same local shape, `grad_accum=4`
+
+**Local (per GPU, one forward)** — unchanged
+
+- `B = 32` sequences
+- `T = 1024`
+- tokens: `32 × 1024 = 32,768`
+
+**Global (one `optimizer.step()`)**
+
+- sequences: `32 × 8 × 4 = 1,024`
+- tokens: `32 × 1024 × 8 × 4 = 1,048,576`
+
+Each GPU now runs four sequential forwards, then one `step()`. All-reduce still runs on each backward (unless `no_sync` is used on the first three).
+
+If `B`, `T`, and GPU count are held fixed, global batch **does** scale with `grad_accum`. This recipe instead **fixes** global tokens at 262,144 and moves the other factors: Tyler’s 2-GPU run used `grad_accum=4`; this 8-GPU run uses `grad_accum=1`. Same global batch, different split. The script asserts `total_batch_size == B*T*world_size*grad_accum`, so flipping only `grad_accum` to 4 without changing `total_batch_size` fails on startup.
+
+---
+
+## 11. One step on 8 GPUs (`grad_accum=1`)
+
+1. Each GPU already holds its own micro-batch from `next_batch()` — different tokens, same `(B, T)` shape.
+2. Forward on all 8, in parallel.
+3. Backward on all 8, in parallel. During this, DDP all-reduces gradients so every rank ends with the same averaged `.grad`.
+4. `optimizer.step()` on every rank. Same grads, same weight update.
+5. `zero_grad()`, then `next_batch()`, and the next step starts.
+
+No extra local forwards in between. The eight micro-batches together are the global batch for that one `step()`.
+
+Batching (`B` rows in one tensor) is a compute/layout choice: those sequences share one kernel launch. Gradient accumulation is a memory workaround: extra sequential forwards when the global token count does not fit in one pass. They are not interchangeable. DDP `world_size` is the third axis — different slices across GPUs.
+
+| Knob | What it parallelizes | Role |
+|---|---|---|
+| `B` | `B` sequences in one GPU forward | utilization and per-pass gradient quality |
+| DDP `world_size` | different slices across GPUs | multi-GPU |
+| `grad_accum` | nothing in parallel; extra sequential passes | fit a larger global batch into memory |
+
+---
+
+## 12. Choosing `B` and `T` for a large run
+
+A micro-batch is shaped `(B, T)` because those two knobs do different jobs. For a large run they are picked against VRAM, not as two independent “bigger is better” sliders.
+
+**`T` is the trained context.** In this baseline `T=1024` and `block_size=1024`, so the model only ever sees 1024-token windows. Small `T` is not merely underfilling the GPU; it changes what the model can learn — no dependency past `T`. Later speedrun steps raise `T` (step 6 uses 32,768) only if memory still fits.
+
+**`B` is how many such windows share one forward.** They run as one batched kernel. Small `B` can leave the GPU idle if `T` is also modest: GEMMs like a fat batch dimension. That is not automatic. `B=1`, `T=32k` can still saturate an H100 because attention work grows with `T` (classically \(O(T^2)\) per sequence). Underutilization is a risk when **both** `B` and `T` are small.
+
+They compete for the same memory. Activations scale about `B × T × depth × width`. The usual move is: set `T` to the context you need, then raise `B` until you almost OOM. If `T` is huge, `B` collapses (often to 1). If that local token count is below the global batch you want (`B×T×GPUs×accum`), you add GPUs or `grad_accum`. That third number is independent of what fits on one GPU.
+
+In one line: **`T` is a modeling choice; `B` is a utilization and memory choice; global tokens are an optimization choice.** This baseline landed on `T=1024`, `B=32` per H100, 8 GPUs, `accum=1` → 262,144 tokens per step.
+
+---
+
 ## Putting the mental picture back together
 
 The corpus is a river of token ids, written to disk in ~200 MB files so you never have to hold the river. The loader is a bookmark: “I am in file 7, at token 4,194,304.” A batch is what you see if you look at the next 32,769 tokens from that bookmark, tear them into 32 rows of 1024, and shift by one to make targets. Eight bookmarks sit 32,768 tokens apart. After each step they all jump forward 262,144 tokens, so they never land on each other. When a file runs out, every rank opens the next file and sits down at its usual offset from the start.
 
-DDP then does what you already know: eight forwards on those eight batches, eight backwards, one averaged gradient, one identical update.
+Each such window is an NTP problem: `x` is the packed prefix side, `y` is the packed next-id side, causal attention keeps the future out of the hidden state. Eight ranks each run one micro-batch, DDP all-reduces, one `optimizer.step()` on 262,144 tokens. That step is the global batch. `B` packed the sequences into one forward; `T` set the context; `grad_accum=1` meant no extra local passes.
 
 Later speedrun steps change the I/O around this (background preload, different `B`/`T`, accumulation math). The baseline idea does not change: one shared stream, one cursor per rank, batches as packed windows, shards as files.
